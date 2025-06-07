@@ -1,0 +1,62 @@
+services:
+
+  mcp-pgvector:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: mcp-pgvector
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "require('http').get('http://localhost:80/healthz', res => process.exit(res.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 10s
+      retries: 3
+    depends_on:
+      - pgvector
+    command: tsx src/pgvector.ts
+    environment:
+      PGHOST: pgvector
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: vector_db
+    networks:
+      - mcp-network
+    ports:
+      - 8000:80
+  mcp-puppeteer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: mcp-puppeteer
+    depends_on:
+      - browserless
+    command: tsx src/puppeteer.ts
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "require('http').get('http://localhost:80/healthz', res => process.exit(res.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 10s
+      retries: 3
+    environment:
+      BROWSER_URL: http://browserless:3000
+      ALLOW_DANGEROUS: 'true'
+      PUPPETEER_LAUNCH_OPTIONS: '{"args": ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]}'
+    networks:
+      - mcp-network
+    ports:
+      - 8001:80
+
+networks:
+  mcp-network:
+    driver: bridge
