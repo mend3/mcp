@@ -6,16 +6,16 @@ These servers expose specific toolsets (like browser automation or database inte
 
 ### 📦 Included Servers
 
-* **Puppeteer**
+- **Puppeteer**  
   Natural language interface to control automated browsers using Puppeteer and Chrome/Browserless.
 
-* **MySQL**
+- **MySQL**  
   Allows users to query and interact with a MySQL database using natural language prompts.
 
-* **Postgres Vector Store**
+- **Postgres Vector Store**  
   Interface to search and interact with a PostgreSQL-backed vector database.
 
-* **Parquet** *(in progress)*
+- **Parquet** _(in progress)_  
   Experimental server that converts between JSON and Parquet formats using natural language instructions.
 
 ---
@@ -38,12 +38,37 @@ Replace `[server]` with the desired module (e.g., `puppeteer`, `mysql`, `postgre
 
 ---
 
+## 🔌 Easy Integration with Clients (Claude, Cursor, etc.)
+
+MCP servers integrate **natively** with clients like **Claude**, **Cursor**, and other MCP-compatible tools.
+
+Just point the client to your MCP server by adding it to your configuration file like this:
+
+__After server is running:__
+
+```json
+{
+  "mcpServers": {
+    "pgvector": {
+      "url": "http://localhost:8000/sse"
+    },
+    "puppeteer": {
+      "url": "http://localhost:8001/sse"
+    }
+  }
+}
+```
+
+This makes your server instantly accessible to tools capable of understanding the MCP protocol.
+
+---
+
 ## 📖 Official MCP Documentation
 
-* [MCP Introduction](https://modelcontextprotocol.io/introduction)
-* [MCP Examples](https://modelcontextprotocol.io/examples)
-* [Quickstart: Node.js Client](https://modelcontextprotocol.io/quickstart/client#node)
-* [MCP TypeScript SDK (GitHub)](https://github.com/modelcontextprotocol/typescript-sdk)
+- [MCP Introduction](https://modelcontextprotocol.io/introduction)  
+- [MCP Examples](https://modelcontextprotocol.io/examples)  
+- [Quickstart: Node.js Client](https://modelcontextprotocol.io/quickstart/client#node)  
+- [MCP TypeScript SDK (GitHub)](https://github.com/modelcontextprotocol/typescript-sdk)
 
 ---
 
