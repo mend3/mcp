@@ -54,6 +54,9 @@ __After server is running:__
     },
     "puppeteer": {
       "url": "http://localhost:8001/sse"
+    },
+    "mysql": {
+      "url": "http://localhost:8002/sse"
     }
   }
 }

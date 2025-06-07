@@ -13,19 +13,79 @@ import {
 } from '@modelcontextprotocol/sdk/types.js'
 import express, { RequestHandler } from 'express'
 import { randomUUID } from 'node:crypto'
+import { z } from 'zod'
 
 type Handler<T = any, R = any> = (req: T) => Promise<R> | R
+
+type PromptMap = Record<string, any>
+
+type ListResourcesHandler = Handler<
+  z.infer<typeof ListResourcesRequestSchema>,
+  { resources: { uri: string; mimeType: string }[] }
+>
+type ReadResourceHandler = Handler<
+  z.infer<typeof ReadResourceRequestSchema>,
+  { contents: { uri: string; mimeType: string; text: string }[] }
+>
+type ListToolsHandler = Handler<
+  z.infer<typeof ListToolsRequestSchema>,
+  {
+    tools: {
+      name: string
+      description: string
+      inputSchema: {
+        type: string
+        properties: {
+          query: {
+            type: string
+          }
+        }
+        required: string[]
+      }
+    }[]
+  }
+>
+type CallToolHandler = Handler<
+  z.infer<typeof CallToolRequestSchema>,
+  { isError?: boolean; content: { type: string; text: string }[] }
+>
+type ListPromptHandler = Handler<
+  z.infer<typeof ListPromptsRequestSchema>,
+  {
+    prompts: {
+      name: string
+      description: string
+      arguments: {
+        name: string
+        description: string
+        required: boolean
+      }[]
+    }[]
+  }
+>
+type GetPromptHandler = Handler<
+  z.infer<typeof GetPromptRequestSchema>,
+  {
+    messages: {
+      role: string
+      content: {
+        type: string
+        text: string
+      }
+    }[]
+  }
+>
 
 interface MCPServerWrapperOptions {
   name: string
   version: string
-  listResources?: Handler
-  readResource?: Handler
-  listTools?: Handler
-  callTool?: Handler
-  listPrompts?: Handler
-  getPrompt?: Handler
   prompts?: Record<string, any>
+  listResources?: ListResourcesHandler
+  readResource?: ReadResourceHandler
+  listTools?: ListToolsHandler
+  callTool?: CallToolHandler
+  listPrompts?: ListPromptHandler
+  getPrompt?: GetPromptHandler
 }
 
 export class MCPServerWrapper {

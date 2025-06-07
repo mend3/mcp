@@ -56,6 +56,35 @@ services:
       - mcp-network
     ports:
       - 8001:80
+  mcp-mysql:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: mcp-mysql
+    command: tsx src/mysql.ts
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "require('http').get('http://localhost:80/healthz', res => process.exit(res.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 10s
+      retries: 3
+    environment:
+      MYSQL_DRIVER: 'mysql' # or 'mariadb'
+      MYSQL_HOST: 'localhost' # or 'mysql' if using a service name
+      MYSQL_USER: 'user'
+      MYSQL_PASSWORD: 'p4ssw0rd'
+      MYSQL_DATABASE: 'db_name'
+      IO_REDIS_HOST: 'localhost' # or 'redis' if using a service name or nothing if not using cache
+      DEBUG: 'false' # or 'true' to enable mysql debug mode
+    networks:
+      - mcp-network
+    ports:
+      - 8002:80
 
 networks:
   mcp-network:
