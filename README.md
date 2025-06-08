@@ -9,11 +9,11 @@ These servers expose specific toolsets (like browser automation or database inte
 - **Puppeteer**  
   Natural language interface to control automated browsers using Puppeteer and Chrome/Browserless.
 
-- **MySQL**  
-  Allows users to query and interact with a MySQL database using natural language prompts.
-
 - **Postgres Vector Store**  
   Interface to search and interact with a PostgreSQL-backed vector database.
+
+- **MySQL**  
+  Allows users to query and interact with a MySQL database using natural language prompts.
 
 - **Parquet** _(in progress)_  
   Experimental server that converts between JSON and Parquet formats using natural language instructions.
@@ -49,10 +49,10 @@ __After server is running:__
 ```json
 {
   "mcpServers": {
-    "pgvector": {
-      "url": "http://localhost:8000/sse"
-    },
     "puppeteer": {
+      "url": "http://localhost:8000/sse",
+    },
+    "pgvector": {
       "url": "http://localhost:8001/sse"
     },
     "mysql": {

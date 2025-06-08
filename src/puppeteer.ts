@@ -1,5 +1,5 @@
-import type { CallToolResult, ImageContent, TextContent, Tool } from '@modelcontextprotocol/sdk/types'
-import puppeteer, { Browser, Page } from 'puppeteer'
+import type { CallToolRequest, CallToolResult, ImageContent, TextContent, Tool } from '@modelcontextprotocol/sdk/types'
+import puppeteer, { Browser, LaunchOptions, Page } from 'puppeteer'
 import { MCPServerWrapper } from './core/wrapper'
 
 const TOOLS: Tool[] = [
@@ -30,7 +30,6 @@ const TOOLS: Tool[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        name: { type: 'string', description: 'Name for the screenshot' },
         selector: { type: 'string', description: 'CSS selector or XPath for element to screenshot' },
         width: { type: 'number', description: 'Width in pixels (default: 800)' },
         height: { type: 'number', description: 'Height in pixels (default: 600)' },
@@ -210,8 +209,8 @@ const TOOLS: Tool[] = [
   },
 ]
 
-let browser: Browser | null
-let page: Page | null
+let browser: Browser | null = null as any // Initialize as null to avoid TypeScript errors
+let page: Page | null = null as any // Initialize as null to avoid TypeScript errors
 const consoleLogs: string[] = []
 const screenshots = new Map<string, string>()
 let previousLaunchOptions: any = null
@@ -223,19 +222,78 @@ async function ensureBrowser({ launchOptions, allowDangerous }: any) {
     '--single-process',
     '--disable-web-security',
     '--ignore-certificate-errors',
-    '--disable-features=IsolateOrigins',
+    '--disable-features=IsolateOrigins,site-per-process', // Reduces site isolation fingerprinting
     '--disable-site-isolation-trials',
     '--allow-running-insecure-content',
   ]
 
-  let envConfig = {}
+  const defaultConfig: LaunchOptions = {
+    headless: false,
+    executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/google-chrome',
+    acceptInsecureCerts: true,
+    defaultViewport: null,
+    protocol: 'cdp',
+    // slowMo: 120, // Uncomment to visualize test
+    args: [
+      ...DANGEROUS_ARGS,
+      // Anonymity & Fingerprinting
+      '--no-zygote',
+      '--no-sandbox', // Required for some environments, but disables Chrome's sandbox. Remove if not needed.
+      '--disable-infobars', // Hides "Chrome is being controlled by automated test software"
+      '--disable-blink-features=AutomationControlled', // Removes automation flag from JS
+      '--disable-dev-shm-usage', // Avoids /dev/shm issues in Docker
+      // Security
+      '--disable-background-networking',
+      '--disable-background-timer-throttling',
+      '--disable-backgrounding-occluded-windows',
+      '--disable-breakpad',
+      '--disable-client-side-phishing-detection',
+      '--disable-component-update',
+      '--disable-default-apps',
+      '--disable-domain-reliability',
+      '--disable-extensions', // Disables all extensions
+      '--disable-hang-monitor',
+      '--disable-ipc-flooding-protection',
+      '--disable-popup-blocking',
+      '--disable-prompt-on-repost',
+      '--disable-renderer-backgrounding',
+      '--disable-sync',
+      '--disable-translate',
+      '--metrics-recording-only',
+      '--no-first-run',
+      '--safebrowsing-disable-auto-update',
+      '--password-store=basic',
+      '--use-mock-keychain',
+
+      // Performance
+      '--disable-gpu', // Disable GPU hardware acceleration
+      '--disable-software-rasterizer',
+      '--no-default-browser-check',
+      '--disable-notifications',
+      '--mute-audio',
+      '--disable-backgrounding-occluded-windows',
+      '--disable-renderer-backgrounding',
+      '--disable-accelerated-2d-canvas',
+      '--disable-accelerated-jpeg-decoding',
+      '--disable-accelerated-mjpeg-decode',
+      '--disable-accelerated-video-decode',
+
+      // Privacy
+      '--disable-logging',
+      '--disable-permissions-api',
+      '--disable-geolocation',
+      '--disable-webgl',
+      '--disable-webrtc',
+    ],
+  }
+  let envConfig: LaunchOptions = {}
   try {
     envConfig = JSON.parse(process.env.PUPPETEER_LAUNCH_OPTIONS || '{}')
   } catch (error: any) {
     console.warn('Failed to parse PUPPETEER_LAUNCH_OPTIONS:', error?.message || error)
   }
 
-  const mergedConfig = deepMerge(envConfig, launchOptions || {})
+  const mergedConfig = deepMerge({ ...defaultConfig, ...envConfig }, launchOptions || {}) as LaunchOptions
 
   if (mergedConfig?.args) {
     const dangerousArgs = mergedConfig.args?.filter?.((arg: string) =>
@@ -264,12 +322,12 @@ async function ensureBrowser({ launchOptions, allowDangerous }: any) {
   previousLaunchOptions = launchOptions
 
   if (!browser) {
-    browser = await puppeteer.connect(
+    browser = await puppeteer.launch(
       deepMerge(
         {
-          headless: true,
+          headless: false,
           acceptInsecureCerts: true,
-          browserWSEndpoint: process.env.BROWSER_URL || 'ws://localhost:9222/devtools/browser',
+          // browserWSEndpoint: process.env.BROWSER_URL || 'ws://localhost:9222/devtools/browser',
           defaultViewport: null,
           protocol: 'cdp',
         },
@@ -330,8 +388,11 @@ declare global {
   }
 }
 
-async function handleToolCall(name: string, args: any): Promise<CallToolResult> {
-  const page = await ensureBrowser(args)
+async function handleToolCallRequest(request: CallToolRequest): Promise<CallToolResult> {
+  const { name, arguments: _args } = request.params
+  const args = structuredClone(_args || {}) as Record<string, any>
+  console.log(`Handling tool call: ${name}`, args)
+  page = await ensureBrowser(args)
 
   switch (name) {
     case 'puppeteer_waitForNavigation':
@@ -413,7 +474,8 @@ async function handleToolCall(name: string, args: any): Promise<CallToolResult> 
       }
 
     case 'puppeteer_navigate':
-      await page.goto(args.url)
+      await page.goto(args.url, { waitUntil: 'load' })
+      await page.waitForNavigation()
       return {
         content: [
           {
@@ -424,28 +486,28 @@ async function handleToolCall(name: string, args: any): Promise<CallToolResult> 
         isError: false,
       }
 
-    case 'puppeteer_screenshot': {
-      const width = args.width ?? 800
-      const height = args.height ?? 600
-      await page.setViewport({ width, height })
+    case 'puppeteer_waitForSelector': {
+      await page.waitForSelector(args.selector, { timeout: args.timeout || 30000 })
+    }
 
-      const screenshot = await (args.selector
-        ? (await page.$(args.selector))?.screenshot({ encoding: 'base64' })
-        : page.screenshot({ encoding: 'base64', fullPage: false }))
+    case 'puppeteer_screenshot': {
+      const screenshot = await page.screenshot({ encoding: 'base64', fullPage: false })
 
       if (!screenshot) {
         return {
           content: [
             {
               type: 'text',
-              text: args.selector ? `Element not found: ${args.selector}` : 'Screenshot failed',
+              text: 'Screenshot failed',
             },
           ],
           isError: true,
         }
       }
 
-      screenshots.set(args.name, screenshot as string)
+      const name = `screenshot-${Date.now()}`
+
+      screenshots.set(name, screenshot as string)
       server.notification({
         method: 'notifications/resources/list_changed',
       })
@@ -454,7 +516,7 @@ async function handleToolCall(name: string, args: any): Promise<CallToolResult> 
         content: [
           {
             type: 'text',
-            text: `Screenshot '${args.name}' taken at ${width}x${height}`,
+            text: `Screenshot '${name}' taken successfully.`,
           } as TextContent,
           {
             type: 'image',
@@ -678,9 +740,7 @@ const server = new MCPServerWrapper({
   listTools: () => ({
     tools: TOOLS,
   }),
-  callTool: async request => {
-    handleToolCall(request.params.name, request.params.arguments ?? {})
-  },
+  callTool: handleToolCallRequest,
 })
 
-server.listen(80)
+server.listen(+(process.env.PORT || 80))

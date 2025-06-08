@@ -1,7 +1,15 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
 import type { NotificationOptions } from '@modelcontextprotocol/sdk/shared/protocol.js'
-import type { Notification } from '@modelcontextprotocol/sdk/types.js'
+import type {
+  CallToolResult,
+  GetPromptResult,
+  ListPromptsResult,
+  ListResourcesResult,
+  ListToolsResult,
+  Notification,
+  ReadResourceResult,
+} from '@modelcontextprotocol/sdk/types.js'
 import {
   CallToolRequestSchema,
   GetPromptRequestSchema,
@@ -17,64 +25,12 @@ import { z } from 'zod'
 
 type Handler<T = any, R = any> = (req: T) => Promise<R> | R
 
-type PromptMap = Record<string, any>
-
-type ListResourcesHandler = Handler<
-  z.infer<typeof ListResourcesRequestSchema>,
-  { resources: { uri: string; mimeType: string }[] }
->
-type ReadResourceHandler = Handler<
-  z.infer<typeof ReadResourceRequestSchema>,
-  { contents: { uri: string; mimeType: string; text: string }[] }
->
-type ListToolsHandler = Handler<
-  z.infer<typeof ListToolsRequestSchema>,
-  {
-    tools: {
-      name: string
-      description: string
-      inputSchema: {
-        type: string
-        properties: {
-          query: {
-            type: string
-          }
-        }
-        required: string[]
-      }
-    }[]
-  }
->
-type CallToolHandler = Handler<
-  z.infer<typeof CallToolRequestSchema>,
-  { isError?: boolean; content: { type: string; text: string }[] }
->
-type ListPromptHandler = Handler<
-  z.infer<typeof ListPromptsRequestSchema>,
-  {
-    prompts: {
-      name: string
-      description: string
-      arguments: {
-        name: string
-        description: string
-        required: boolean
-      }[]
-    }[]
-  }
->
-type GetPromptHandler = Handler<
-  z.infer<typeof GetPromptRequestSchema>,
-  {
-    messages: {
-      role: string
-      content: {
-        type: string
-        text: string
-      }
-    }[]
-  }
->
+type ListResourcesHandler = Handler<z.infer<typeof ListResourcesRequestSchema>, ListResourcesResult>
+type ReadResourceHandler = Handler<z.infer<typeof ReadResourceRequestSchema>, ReadResourceResult>
+type ListToolsHandler = Handler<z.infer<typeof ListToolsRequestSchema>, ListToolsResult>
+type CallToolHandler = Handler<z.infer<typeof CallToolRequestSchema>, Awaited<CallToolResult> | CallToolResult>
+type ListPromptHandler = Handler<z.infer<typeof ListPromptsRequestSchema>, ListPromptsResult>
+type GetPromptHandler = Handler<z.infer<typeof GetPromptRequestSchema>, GetPromptResult>
 
 interface MCPServerWrapperOptions {
   name: string
