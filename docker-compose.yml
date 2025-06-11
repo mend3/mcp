@@ -3,6 +3,8 @@ services:
     build:
       context: mcp
       dockerfile: Dockerfile
+      args:
+        - NODE_VERSION=${NODE_VERSION}
     container_name: mcp-puppeteer
     command: tsx src/puppeteer.ts
     healthcheck:
@@ -17,7 +19,7 @@ services:
       timeout: 10s
       retries: 3
     environment:
-      BROWSER_URL: http://localhost:3000 # or '<service-host>:<service-port>' if using a service name
+      BROWSER_HOST: ${BROWSER_HOST:-http://browserless:3000}
       ALLOW_DANGEROUS: 'true'
       PUPPETEER_LAUNCH_OPTIONS: '{"args": ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]}'
     networks:
@@ -28,6 +30,8 @@ services:
     build:
       context: mcp
       dockerfile: Dockerfile
+      args:
+        - NODE_VERSION=${NODE_VERSION}
     container_name: mcp-pgvector
     healthcheck:
       test:
@@ -42,11 +46,11 @@ services:
       retries: 3
     command: tsx src/pgvector.ts
     environment:
-      PGHOST: localhost # or '<service-name>' if using a service name
-      PGPORT: 5432
-      PGUSER: postgres
-      PGPASSWORD: postgres
-      PGDATABASE: vector_db
+      PGHOST: ${PGVECTOR_HOST}
+      PGPORT: ${PGVECTOR_PORT}
+      PGUSER: ${PGVECTOR_USER}
+      PGPASSWORD: ${PGVECTOR_PASSWORD}
+      PGDATABASE: ${PGVECTOR_DATABASE}
     networks:
       - mcp-network
     ports:
@@ -55,6 +59,8 @@ services:
     build:
       context: mcp
       dockerfile: Dockerfile
+      args:
+        - NODE_VERSION=${NODE_VERSION}
     container_name: mcp-mysql
     command: tsx src/mysql.ts
     healthcheck:
@@ -69,12 +75,12 @@ services:
       timeout: 10s
       retries: 3
     environment:
-      MYSQL_DRIVER: mysql # or mariadb
-      MYSQL_HOST: localhost # or <service-name> if using a service name
-      MYSQL_USER: <your-user>
-      MYSQL_PASSWORD: <your-password>
-      MYSQL_DATABASE: <your-database>
-      IO_REDIS_HOST: localhost # or <service-name> if using a service name or nothing if not using cache
+      MYSQL_DRIVER: ${MYSQL_DRIVER:-mysql} # or mariadb
+      MYSQL_HOST: ${MYSQL_HOST:-mysql}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      IO_REDIS_HOST: ${REDIS_HOST:-redis}
       DEBUG: false # or true to enable mysql debug mode
     networks:
       - mcp-network
