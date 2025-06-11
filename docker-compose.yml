@@ -1,7 +1,7 @@
 services:
   mcp-puppeteer:
     build:
-      context: .
+      context: mcp
       dockerfile: Dockerfile
     container_name: mcp-puppeteer
     command: tsx src/puppeteer.ts
@@ -17,7 +17,7 @@ services:
       timeout: 10s
       retries: 3
     environment:
-      BROWSER_URL: http://browserless:3000
+      BROWSER_URL: http://localhost:3000 # or '<service-host>:<service-port>' if using a service name
       ALLOW_DANGEROUS: 'true'
       PUPPETEER_LAUNCH_OPTIONS: '{"args": ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]}'
     networks:
@@ -26,7 +26,7 @@ services:
       - 8000:80
   mcp-pgvector:
     build:
-      context: .
+      context: mcp
       dockerfile: Dockerfile
     container_name: mcp-pgvector
     healthcheck:
@@ -42,7 +42,7 @@ services:
       retries: 3
     command: tsx src/pgvector.ts
     environment:
-      PGHOST: pgvector
+      PGHOST: localhost # or '<service-name>' if using a service name
       PGPORT: 5432
       PGUSER: postgres
       PGPASSWORD: postgres
@@ -53,7 +53,7 @@ services:
       - 8001:80
   mcp-mysql:
     build:
-      context: .
+      context: mcp
       dockerfile: Dockerfile
     container_name: mcp-mysql
     command: tsx src/mysql.ts
@@ -69,38 +69,17 @@ services:
       timeout: 10s
       retries: 3
     environment:
-      MYSQL_DRIVER: 'mysql' # or 'mariadb'
-      MYSQL_HOST: 'localhost' # or 'mysql' if using a service name
-      MYSQL_USER: 'user'
-      MYSQL_PASSWORD: 'p4ssw0rd'
-      MYSQL_DATABASE: 'db_name'
-      IO_REDIS_HOST: 'localhost' # or 'redis' if using a service name or nothing if not using cache
-      DEBUG: 'false' # or 'true' to enable mysql debug mode
+      MYSQL_DRIVER: mysql # or mariadb
+      MYSQL_HOST: localhost # or <service-name> if using a service name
+      MYSQL_USER: <your-user>
+      MYSQL_PASSWORD: <your-password>
+      MYSQL_DATABASE: <your-database>
+      IO_REDIS_HOST: localhost # or <service-name> if using a service name or nothing if not using cache
+      DEBUG: false # or true to enable mysql debug mode
     networks:
       - mcp-network
     ports:
       - 8002:80
-  mcp-parquet:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: mcp-parquet
-    command: tsx src/parquet.ts
-    healthcheck:
-      test:
-        [
-          'CMD',
-          'node',
-          '-e',
-          "require('http').get('http://localhost:80/healthz', res => process.exit(res.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))",
-        ]
-      interval: 5s
-      timeout: 10s
-      retries: 3
-    networks:
-      - mcp-network
-    ports:
-      - 8003:80
 
 networks:
   mcp-network:

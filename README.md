@@ -4,7 +4,7 @@
 
 These servers expose specific toolsets (like browser automation or database interaction) via a natural language interface using the MCP protocol.
 
-### 📦 Included Servers
+## 📦 Included Servers
 
 - **Puppeteer**  
   Natural language interface to control automated browsers using Puppeteer and Chrome/Browserless.
@@ -22,6 +22,22 @@ These servers expose specific toolsets (like browser automation or database inte
 
 ## 🚀 Getting Started
 
+**Clone and build:**
+
+```bash
+# 1 - clone this repo
+git clone https://github.com/mend3/mcp
+
+# 2 - that will create a folder called "mcp" on your current directory
+# with that in mind, you can just attach the docker-compose
+docker compose up \
+  # your docker-compose
+  -f docker-compose.yml \ 
+  # mcp docker-compose
+  -f mcp/docker-compose.yml \ 
+  build mcp-*
+```
+
 **Start all MCP servers using Docker Compose:**
 
 ```bash
@@ -34,7 +50,7 @@ docker compose up -d mcp-*
 tsx src/[server]
 ```
 
-Replace `[server]` with the desired module (e.g., `puppeteer`, `mysql`, `postgres-vector`).
+Replace `[server]` with the desired module (e.g., `puppeteer`, `mysql`, `pgvector`).
 
 ---
 
@@ -44,13 +60,13 @@ MCP servers integrate **natively** with clients like **Claude**, **Cursor**, and
 
 Just point the client to your MCP server by adding it to your configuration file like this:
 
-__After server is running:__
+**After server is running:**
 
 ```json
 {
   "mcpServers": {
     "puppeteer": {
-      "url": "http://localhost:8000/sse",
+      "url": "http://localhost:8000/sse"
     },
     "pgvector": {
       "url": "http://localhost:8001/sse"
@@ -68,9 +84,9 @@ This makes your server instantly accessible to tools capable of understanding th
 
 ## 📖 Official MCP Documentation
 
-- [MCP Introduction](https://modelcontextprotocol.io/introduction)  
-- [MCP Examples](https://modelcontextprotocol.io/examples)  
-- [Quickstart: Node.js Client](https://modelcontextprotocol.io/quickstart/client#node)  
+- [MCP Introduction](https://modelcontextprotocol.io/introduction)
+- [MCP Examples](https://modelcontextprotocol.io/examples)
+- [Quickstart: Node.js Client](https://modelcontextprotocol.io/quickstart/client#node)
 - [MCP TypeScript SDK (GitHub)](https://github.com/modelcontextprotocol/typescript-sdk)
 
 ---
