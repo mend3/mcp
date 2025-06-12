@@ -18,12 +18,14 @@ services:
       interval: 5s
       timeout: 10s
       retries: 3
+    depends_on:
+      - browserless
     environment:
-      BROWSER_HOST: ${BROWSER_HOST:-http://browserless:3000}
+      BROWSER_HOST: ws://browserless:3000/
       ALLOW_DANGEROUS: 'true'
       PUPPETEER_LAUNCH_OPTIONS: '{"args": ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]}'
     networks:
-      - mcp-network
+      - internal
     ports:
       - 8000:80
   mcp-pgvector:
@@ -52,7 +54,7 @@ services:
       PGPASSWORD: ${PGVECTOR_PASSWORD}
       PGDATABASE: ${PGVECTOR_DATABASE}
     networks:
-      - mcp-network
+      - internal
     ports:
       - 8001:80
   mcp-mysql:
@@ -83,10 +85,10 @@ services:
       IO_REDIS_HOST: ${REDIS_HOST:-redis}
       DEBUG: false # or true to enable mysql debug mode
     networks:
-      - mcp-network
+      - internal
     ports:
       - 8002:80
 
 networks:
-  mcp-network:
+  internal:
     driver: bridge

@@ -32,9 +32,9 @@ git clone https://github.com/mend3/mcp
 # with that in mind, you can just attach the docker-compose
 docker compose up \
   # your docker-compose
-  -f docker-compose.yml \ 
+  -f docker-compose.yml \
   # mcp docker-compose
-  -f mcp/docker-compose.yml \ 
+  -f mcp/docker-compose.yml \
   build mcp-*
 ```
 
@@ -66,12 +66,15 @@ Just point the client to your MCP server by adding it to your configuration file
 {
   "mcpServers": {
     "puppeteer": {
+      "type": "sse",
       "url": "http://localhost:8000/sse"
     },
     "pgvector": {
+      "type": "sse",
       "url": "http://localhost:8001/sse"
     },
     "mysql": {
+      "type": "sse",
       "url": "http://localhost:8002/sse"
     }
   }

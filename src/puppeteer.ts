@@ -2,6 +2,190 @@ import type { CallToolRequest, CallToolResult, ImageContent, TextContent, Tool }
 import puppeteer, { Browser, LaunchOptions, Page } from 'puppeteer'
 import { MCPServerWrapper } from './core/wrapper'
 
+
+let browser: Browser | null = null as any // Initialize as null to avoid TypeScript errors
+let page: Page | null = null as any // Initialize as null to avoid TypeScript errors
+const consoleLogs: string[] = []
+const screenshots = new Map<string, string>()
+let previousLaunchOptions: any = null
+
+async function ensureBrowser({ launchOptions, allowDangerous }: { launchOptions: LaunchOptions, allowDangerous: boolean }) {
+  const DANGEROUS_ARGS = [
+    '--no-sandbox',
+    '--disable-setuid-sandbox',
+    '--single-process',
+    '--disable-web-security',
+    '--ignore-certificate-errors',
+    '--disable-features=IsolateOrigins,site-per-process', // Reduces site isolation fingerprinting
+    '--disable-site-isolation-trials',
+    '--allow-running-insecure-content',
+  ]
+
+  const defaultConfig: LaunchOptions = {
+    headless: false,
+    executablePath: process.env.CHROME_EXECUTABLE_PATH || '/usr/bin/google-chrome',
+    acceptInsecureCerts: true,
+    defaultViewport: null,
+    protocol: 'cdp',
+    // slowMo: 120, // Uncomment to visualize test
+    args: [
+      ...DANGEROUS_ARGS,
+      // Anonymity & Fingerprinting
+      '--no-zygote',
+      '--no-sandbox', // Required for some environments, but disables Chrome's sandbox. Remove if not needed.
+      '--disable-infobars', // Hides "Chrome is being controlled by automated test software"
+      '--disable-blink-features=AutomationControlled', // Removes automation flag from JS
+      '--disable-dev-shm-usage', // Avoids /dev/shm issues in Docker
+      // Security
+      '--disable-background-networking',
+      '--disable-background-timer-throttling',
+      '--disable-backgrounding-occluded-windows',
+      '--disable-breakpad',
+      '--disable-client-side-phishing-detection',
+      '--disable-component-update',
+      '--disable-default-apps',
+      '--disable-domain-reliability',
+      '--disable-extensions', // Disables all extensions
+      '--disable-hang-monitor',
+      '--disable-ipc-flooding-protection',
+      '--disable-popup-blocking',
+      '--disable-prompt-on-repost',
+      '--disable-renderer-backgrounding',
+      '--disable-sync',
+      '--disable-translate',
+      '--metrics-recording-only',
+      '--no-first-run',
+      '--safebrowsing-disable-auto-update',
+      '--password-store=basic',
+      '--use-mock-keychain',
+
+      // Performance
+      '--disable-gpu', // Disable GPU hardware acceleration
+      '--disable-software-rasterizer',
+      '--no-default-browser-check',
+      '--disable-notifications',
+      '--mute-audio',
+      '--disable-backgrounding-occluded-windows',
+      '--disable-renderer-backgrounding',
+      '--disable-accelerated-2d-canvas',
+      '--disable-accelerated-jpeg-decoding',
+      '--disable-accelerated-mjpeg-decode',
+      '--disable-accelerated-video-decode',
+
+      // Privacy
+      '--disable-logging',
+      '--disable-permissions-api',
+      '--disable-geolocation',
+      '--disable-webgl',
+      '--disable-webrtc',
+    ],
+  }
+  let envConfig: LaunchOptions = {}
+  try {
+    envConfig = JSON.parse(process.env.PUPPETEER_LAUNCH_OPTIONS || '{}')
+  } catch (error: any) {
+    console.warn('Failed to parse PUPPETEER_LAUNCH_OPTIONS:', error?.message || error)
+  }
+
+  const mergedConfig = deepMerge({ ...defaultConfig, ...envConfig }, launchOptions || {}) as LaunchOptions
+
+  if (mergedConfig?.args) {
+    const dangerousArgs = mergedConfig.args?.filter?.((arg: string) =>
+      DANGEROUS_ARGS.some((dangerousArg: string) => arg.startsWith(dangerousArg)),
+    )
+    if (dangerousArgs?.length > 0 && !(allowDangerous || process.env.ALLOW_DANGEROUS === 'true')) {
+      throw new Error(
+        `Dangerous browser arguments detected: ${dangerousArgs.join(', ')}. Fround from environment variable and tool call argument. ` +
+        'Set allowDangerous: true in the tool call arguments to override.',
+      )
+    }
+  }
+
+  try {
+    if (
+      (browser && !browser.connected) ||
+      (launchOptions && JSON.stringify(launchOptions) != JSON.stringify(previousLaunchOptions))
+    ) {
+      await browser?.close()
+      browser = null
+    }
+  } catch (error) {
+    browser = null
+  }
+
+  previousLaunchOptions = launchOptions
+
+  if (!browser) {
+    browser = await (process.env.BROWSER_HOST ? puppeteer.connect({
+      acceptInsecureCerts: true,
+      browserWSEndpoint: process.env.BROWSER_HOST || 'ws://localhost:9222/devtools/browser',
+      defaultViewport: null,
+      protocol: 'cdp',
+    }) : puppeteer.launch(
+      deepMerge(
+        {
+          headless: false,
+          acceptInsecureCerts: true,
+          defaultViewport: null,
+          protocol: 'cdp',
+        },
+        mergedConfig,
+      ),
+    ))
+    const pages = await browser.pages()
+    page = pages[0]
+
+    page.on('console', msg => {
+      const logEntry = `[${msg.type()}] ${msg.text()}`
+      consoleLogs.push(logEntry)
+      server.notification({
+        method: 'notifications/resources/updated',
+        params: { uri: 'console://logs' },
+      })
+    })
+  }
+  return page!
+}
+
+function deepMerge(target: any, source: any): any {
+  const output = Object.assign({}, target)
+  if (typeof target !== 'object' || typeof source !== 'object') return source
+
+  for (const key of Object.keys(source)) {
+    const targetVal = target[key]
+    const sourceVal = source[key]
+    if (Array.isArray(targetVal) && Array.isArray(sourceVal)) {
+      output[key] = [
+        ...new Set([
+          ...(key === 'args' || key === 'ignoreDefaultArgs'
+            ? targetVal.filter(
+              (arg: string) =>
+                !sourceVal.some(
+                  (launchArg: string) => arg.startsWith('--') && launchArg.startsWith(arg.split('=')[0]),
+                ),
+            )
+            : targetVal),
+          ...sourceVal,
+        ]),
+      ]
+    } else if (sourceVal instanceof Object && key in target) {
+      output[key] = deepMerge(targetVal, sourceVal)
+    } else {
+      output[key] = sourceVal
+    }
+  }
+  return output
+}
+
+declare global {
+  interface Window {
+    mcpHelper: {
+      logs: string[]
+      originalConsole: Partial<typeof console>
+    }
+  }
+}
+
 const TOOLS: Tool[] = [
   {
     name: 'puppeteer_navigate',
@@ -34,7 +218,6 @@ const TOOLS: Tool[] = [
         width: { type: 'number', description: 'Width in pixels (default: 800)' },
         height: { type: 'number', description: 'Height in pixels (default: 600)' },
       },
-      required: ['name'],
     },
   },
   {
@@ -209,327 +392,168 @@ const TOOLS: Tool[] = [
   },
 ]
 
-let browser: Browser | null = null as any // Initialize as null to avoid TypeScript errors
-let page: Page | null = null as any // Initialize as null to avoid TypeScript errors
-const consoleLogs: string[] = []
-const screenshots = new Map<string, string>()
-let previousLaunchOptions: any = null
-
-async function ensureBrowser({ launchOptions, allowDangerous }: any) {
-  const DANGEROUS_ARGS = [
-    '--no-sandbox',
-    '--disable-setuid-sandbox',
-    '--single-process',
-    '--disable-web-security',
-    '--ignore-certificate-errors',
-    '--disable-features=IsolateOrigins,site-per-process', // Reduces site isolation fingerprinting
-    '--disable-site-isolation-trials',
-    '--allow-running-insecure-content',
-  ]
-
-  const defaultConfig: LaunchOptions = {
-    headless: false,
-    executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/google-chrome',
-    acceptInsecureCerts: true,
-    defaultViewport: null,
-    protocol: 'cdp',
-    // slowMo: 120, // Uncomment to visualize test
-    args: [
-      ...DANGEROUS_ARGS,
-      // Anonymity & Fingerprinting
-      '--no-zygote',
-      '--no-sandbox', // Required for some environments, but disables Chrome's sandbox. Remove if not needed.
-      '--disable-infobars', // Hides "Chrome is being controlled by automated test software"
-      '--disable-blink-features=AutomationControlled', // Removes automation flag from JS
-      '--disable-dev-shm-usage', // Avoids /dev/shm issues in Docker
-      // Security
-      '--disable-background-networking',
-      '--disable-background-timer-throttling',
-      '--disable-backgrounding-occluded-windows',
-      '--disable-breakpad',
-      '--disable-client-side-phishing-detection',
-      '--disable-component-update',
-      '--disable-default-apps',
-      '--disable-domain-reliability',
-      '--disable-extensions', // Disables all extensions
-      '--disable-hang-monitor',
-      '--disable-ipc-flooding-protection',
-      '--disable-popup-blocking',
-      '--disable-prompt-on-repost',
-      '--disable-renderer-backgrounding',
-      '--disable-sync',
-      '--disable-translate',
-      '--metrics-recording-only',
-      '--no-first-run',
-      '--safebrowsing-disable-auto-update',
-      '--password-store=basic',
-      '--use-mock-keychain',
-
-      // Performance
-      '--disable-gpu', // Disable GPU hardware acceleration
-      '--disable-software-rasterizer',
-      '--no-default-browser-check',
-      '--disable-notifications',
-      '--mute-audio',
-      '--disable-backgrounding-occluded-windows',
-      '--disable-renderer-backgrounding',
-      '--disable-accelerated-2d-canvas',
-      '--disable-accelerated-jpeg-decoding',
-      '--disable-accelerated-mjpeg-decode',
-      '--disable-accelerated-video-decode',
-
-      // Privacy
-      '--disable-logging',
-      '--disable-permissions-api',
-      '--disable-geolocation',
-      '--disable-webgl',
-      '--disable-webrtc',
-    ],
-  }
-  let envConfig: LaunchOptions = {}
-  try {
-    envConfig = JSON.parse(process.env.PUPPETEER_LAUNCH_OPTIONS || '{}')
-  } catch (error: any) {
-    console.warn('Failed to parse PUPPETEER_LAUNCH_OPTIONS:', error?.message || error)
-  }
-
-  const mergedConfig = deepMerge({ ...defaultConfig, ...envConfig }, launchOptions || {}) as LaunchOptions
-
-  if (mergedConfig?.args) {
-    const dangerousArgs = mergedConfig.args?.filter?.((arg: string) =>
-      DANGEROUS_ARGS.some((dangerousArg: string) => arg.startsWith(dangerousArg)),
-    )
-    if (dangerousArgs?.length > 0 && !(allowDangerous || process.env.ALLOW_DANGEROUS === 'true')) {
-      throw new Error(
-        `Dangerous browser arguments detected: ${dangerousArgs.join(', ')}. Fround from environment variable and tool call argument. ` +
-          'Set allowDangerous: true in the tool call arguments to override.',
-      )
-    }
-  }
-
-  try {
-    if (
-      (browser && !browser.connected) ||
-      (launchOptions && JSON.stringify(launchOptions) != JSON.stringify(previousLaunchOptions))
-    ) {
-      await browser?.close()
-      browser = null
-    }
-  } catch (error) {
-    browser = null
-  }
-
-  previousLaunchOptions = launchOptions
-
-  if (!browser) {
-    browser = await puppeteer.launch(
-      deepMerge(
-        {
-          headless: false,
-          acceptInsecureCerts: true,
-          // browserWSEndpoint: process.env.BROWSER_URL || 'ws://localhost:9222/devtools/browser',
-          defaultViewport: null,
-          protocol: 'cdp',
-        },
-        mergedConfig,
-      ),
-    )
-    const pages = await browser.pages()
-    page = pages[0]
-
-    page.on('console', msg => {
-      const logEntry = `[${msg.type()}] ${msg.text()}`
-      consoleLogs.push(logEntry)
-      server.notification({
-        method: 'notifications/resources/updated',
-        params: { uri: 'console://logs' },
-      })
-    })
-  }
-  return page!
-}
-
-function deepMerge(target: any, source: any): any {
-  const output = Object.assign({}, target)
-  if (typeof target !== 'object' || typeof source !== 'object') return source
-
-  for (const key of Object.keys(source)) {
-    const targetVal = target[key]
-    const sourceVal = source[key]
-    if (Array.isArray(targetVal) && Array.isArray(sourceVal)) {
-      output[key] = [
-        ...new Set([
-          ...(key === 'args' || key === 'ignoreDefaultArgs'
-            ? targetVal.filter(
-                (arg: string) =>
-                  !sourceVal.some(
-                    (launchArg: string) => arg.startsWith('--') && launchArg.startsWith(arg.split('=')[0]),
-                  ),
-              )
-            : targetVal),
-          ...sourceVal,
-        ]),
-      ]
-    } else if (sourceVal instanceof Object && key in target) {
-      output[key] = deepMerge(targetVal, sourceVal)
-    } else {
-      output[key] = sourceVal
-    }
-  }
-  return output
-}
-
-declare global {
-  interface Window {
-    mcpHelper: {
-      logs: string[]
-      originalConsole: Partial<typeof console>
-    }
-  }
-}
-
 async function handleToolCallRequest(request: CallToolRequest): Promise<CallToolResult> {
-  const { name, arguments: _args } = request.params
-  const args = structuredClone(_args || {}) as Record<string, any>
+  const { name, arguments: _args } = request.params as { name: string, arguments: any }
+  const args = structuredClone(_args || {})
   console.log(`Handling tool call: ${name}`, args)
   page = await ensureBrowser(args)
 
-  switch (name) {
-    case 'puppeteer_waitForNavigation':
-      await page.waitForNavigation({
-        timeout: args.timeout,
-        waitUntil: args.waitUntil || 'load',
-      })
-      return {
-        content: [{ type: 'text', text: `Waited for navigation (waitUntil: ${args.waitUntil || 'load'})` }],
-        isError: false,
+  try {
+    if (!page) throw new Error('Failed to get a page')
+
+    switch (name) {
+      case 'puppeteer_waitForNavigation': {
+        await page.waitForNavigation({
+          timeout: args.timeout,
+          waitUntil: args.waitUntil || 'load',
+        })
+        return {
+          content: [{ type: 'text', text: `Waited for navigation (waitUntil: ${args.waitUntil || 'load'})` }],
+          isError: false,
+        }
       }
 
-    case 'puppeteer_scrollTo':
-      await page.evaluate(({ x = 0, y = 0 }) => window.scrollTo(x, y), { x: args.x, y: args.y })
-      return {
-        content: [{ type: 'text', text: `Scrolled to position x:${args.x || 0}, y:${args.y || 0}` }],
-        isError: false,
-      }
-    case 'puppeteer_closeBrowser':
-      if (browser) await browser.close()
-      return {
-        content: [{ type: 'text', text: `Browser closed` }],
-        isError: false,
+      case 'puppeteer_scrollTo': {
+        await page.evaluate(({ x = 0, y = 0 }) => window.scrollTo(x, y), { x: args.x, y: args.y })
+        return {
+          content: [{ type: 'text', text: `Scrolled to position x:${args.x || 0}, y:${args.y || 0}` }],
+          isError: false,
+        }
       }
 
-    case 'puppeteer_scrollElement':
-      await page.evaluate(
-        ({ selector, x = 0, y = 0 }) => {
-          const el = document.querySelector(selector)
-          if (el) el.scrollTo(x, y)
-        },
-        { selector: args.selector, x: args.x, y: args.y },
-      )
-      return {
-        content: [{ type: 'text', text: `Scrolled element ${args.selector} to x:${args.x || 0}, y:${args.y || 0}` }],
-        isError: false,
+      case 'puppeteer_closeBrowser': {
+        if (browser) await browser.close()
+        return {
+          content: [{ type: 'text', text: `Browser closed` }],
+          isError: false,
+        }
       }
 
-    case 'puppeteer_evaluateAll':
-      const results = await page.$$eval(
-        args.selector,
-        (elements, expression) => {
-          return elements.map(el => {
-            try {
-              return eval(expression)
-            } catch (e) {
-              return null
-            }
-          })
-        },
-        args.expression,
-      )
-      return {
-        content: [{ type: 'text', text: JSON.stringify(results) }],
-        isError: false,
-      }
-
-    case 'puppeteer_pressKey':
-      await page.keyboard.press(args.key, {
-        delay: args.delay,
-      })
-      return {
-        content: [{ type: 'text', text: `Pressed key ${args.key}` }],
-        isError: false,
-      }
-
-    case 'puppeteer_closePage':
-      await page.close()
-      return {
-        content: [{ type: 'text', text: `Closed the page` }],
-        isError: false,
-      }
-
-    case 'puppeteer_reloadPage':
-      await page.reload({ waitUntil: args.waitUntil || 'load' })
-      return {
-        content: [{ type: 'text', text: `Reloaded the page (waitUntil: ${args.waitUntil || 'load'})` }],
-        isError: false,
-      }
-
-    case 'puppeteer_navigate':
-      await page.goto(args.url, { waitUntil: 'load' })
-      await page.waitForNavigation()
-      return {
-        content: [
-          {
-            type: 'text',
-            text: `Navigated to ${args.url}`,
+      case 'puppeteer_scrollElement': {
+        await page.evaluate(
+          ({ selector, x = 0, y = 0 }) => {
+            const el = document.querySelector(selector)
+            if (el) el.scrollTo(x, y)
           },
-        ],
-        isError: false,
+          { selector: args.selector, x: args.x, y: args.y },
+        )
+        return {
+          content: [{ type: 'text', text: `Scrolled element ${args.selector} to x:${args.x || 0}, y:${args.y || 0}` }],
+          isError: false,
+        }
       }
 
-    case 'puppeteer_waitForSelector': {
-      await page.waitForSelector(args.selector, { timeout: args.timeout || 30000 })
-    }
+      case 'puppeteer_evaluateAll': {
+        const results = await page.$$eval(
+          args.selector,
+          (elements, expression) => {
+            return elements.map(el => {
+              try {
+                return eval(expression)
+              } catch (e) {
+                return null
+              }
+            })
+          },
+          args.expression,
+        )
+        return {
+          content: [{ type: 'text', text: JSON.stringify(results) }],
+          isError: false,
+        }
+      }
 
-    case 'puppeteer_screenshot': {
-      const screenshot = await page.screenshot({ encoding: 'base64', fullPage: false })
+      case 'puppeteer_pressKey': {
+        await page.keyboard.press(args.key, {
+          delay: args.delay,
+        })
+        return {
+          content: [{ type: 'text', text: `Pressed key ${args.key}` }],
+          isError: false,
+        }
+      }
 
-      if (!screenshot) {
+      case 'puppeteer_closePage': {
+        await page.close()
+        return {
+          content: [{ type: 'text', text: `Closed the page` }],
+          isError: false,
+        }
+      }
+
+      case 'puppeteer_reloadPage': {
+        await page.reload({ waitUntil: args.waitUntil || 'load' })
+        return {
+          content: [{ type: 'text', text: `Reloaded the page (waitUntil: ${args.waitUntil || 'load'})` }],
+          isError: false,
+        }
+      }
+
+      case 'puppeteer_navigate': {
+        await page.goto(args.url, { waitUntil: 'load' })
         return {
           content: [
             {
               type: 'text',
-              text: 'Screenshot failed',
+              text: `Navigated to ${args.url}`,
             },
           ],
-          isError: true,
+          isError: false,
         }
       }
 
-      const name = `screenshot-${Date.now()}`
-
-      screenshots.set(name, screenshot as string)
-      server.notification({
-        method: 'notifications/resources/list_changed',
-      })
-
-      return {
-        content: [
-          {
-            type: 'text',
-            text: `Screenshot '${name}' taken successfully.`,
-          } as TextContent,
-          {
-            type: 'image',
-            data: screenshot,
-            mimeType: 'image/png',
-          } as ImageContent,
-        ],
-        isError: false,
+      case 'puppeteer_waitForSelector': {
+        await page.waitForSelector(args.selector, { timeout: args.timeout || 30000 })
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `Selector found: ${args.selector}`,
+            },
+          ],
+          isError: false,
+        }
       }
-    }
 
-    case 'puppeteer_click':
-      try {
+      case 'puppeteer_screenshot': {
+        const screenshot = await page.screenshot({ encoding: 'base64', fullPage: false })
+
+        if (!screenshot) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: 'Screenshot failed',
+              },
+            ],
+            isError: true,
+          }
+        }
+
+        const name = `screenshot-${Date.now()}`
+
+        screenshots.set(name, screenshot as string)
+        server.notification({
+          method: 'notifications/resources/list_changed',
+        })
+
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `Screenshot '${name}' taken successfully.`,
+            } as TextContent,
+            {
+              type: 'image',
+              data: screenshot,
+              mimeType: 'image/png',
+            } as ImageContent,
+          ],
+          isError: false,
+        }
+      }
+
+      case 'puppeteer_click': {
         await page.click(args.selector)
         return {
           content: [
@@ -540,20 +564,9 @@ async function handleToolCallRequest(request: CallToolRequest): Promise<CallTool
           ],
           isError: false,
         }
-      } catch (error) {
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `Failed to click ${args.selector}: ${(error as Error).message}`,
-            },
-          ],
-          isError: true,
-        }
       }
 
-    case 'puppeteer_fill':
-      try {
+      case 'puppeteer_fill': {
         await page.waitForSelector(args.selector)
         await page.type(args.selector, args.value)
         return {
@@ -565,20 +578,9 @@ async function handleToolCallRequest(request: CallToolRequest): Promise<CallTool
           ],
           isError: false,
         }
-      } catch (error) {
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `Failed to fill ${args.selector}: ${(error as Error).message}`,
-            },
-          ],
-          isError: true,
-        }
       }
 
-    case 'puppeteer_select':
-      try {
+      case 'puppeteer_select': {
         await page.waitForSelector(args.selector)
         await page.select(args.selector, args.value)
         return {
@@ -590,20 +592,9 @@ async function handleToolCallRequest(request: CallToolRequest): Promise<CallTool
           ],
           isError: false,
         }
-      } catch (error) {
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `Failed to select ${args.selector}: ${(error as Error).message}`,
-            },
-          ],
-          isError: true,
-        }
       }
 
-    case 'puppeteer_hover':
-      try {
+      case 'puppeteer_hover': {
         await page.waitForSelector(args.selector)
         await page.hover(args.selector)
         return {
@@ -615,73 +606,76 @@ async function handleToolCallRequest(request: CallToolRequest): Promise<CallTool
           ],
           isError: false,
         }
-      } catch (error) {
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `Failed to hover ${args.selector}: ${(error as Error).message}`,
-            },
-          ],
-          isError: true,
-        }
       }
 
-    case 'puppeteer_evaluate':
-      try {
-        await page.evaluate(() => {
-          window.mcpHelper = {
-            logs: [],
-            originalConsole: { ...console },
-          }
-          ;['log', 'info', 'warn', 'error'].forEach(method => {
-            ;(console as any)[method] = (...args: any[]) => {
-              window.mcpHelper.logs.push(`[${method}] ${args.join(' ')}`)
-              ;(window.mcpHelper.originalConsole as any)[method](...args)
+      case 'puppeteer_evaluate': {
+        try {
+          await page.evaluate(() => {
+            window.mcpHelper = {
+              logs: [],
+              originalConsole: { ...console },
             }
+              ;['log', 'info', 'warn', 'error'].forEach(method => {
+                ; (console as any)[method] = (...args: any[]) => {
+                  window.mcpHelper.logs.push(`[${method}] ${args.join(' ')}`)
+                    ; (window.mcpHelper.originalConsole as any)[method](...args)
+                }
+              })
           })
-        })
 
-        const result = await page.evaluate(args.script)
+          const result = await page.evaluate(args.script)
 
-        const logs = await page.evaluate(() => {
-          Object.assign(console, window.mcpHelper.originalConsole)
-          const logs = window.mcpHelper.logs
-          delete (window as any).mcpHelper
-          return logs
-        })
+          const logs = await page.evaluate(() => {
+            Object.assign(console, window.mcpHelper.originalConsole)
+            const logs = window.mcpHelper.logs
+            delete (window as any).mcpHelper
+            return logs
+          })
 
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `Execution result:\n${JSON.stringify(result, null, 2)}\n\nConsole output:\n${logs.join('\n')}`,
-            },
-          ],
-          isError: false,
+          return {
+            content: [
+              {
+                type: 'text',
+                text: `Execution result:\n${JSON.stringify(result, null, 2)}\n\nConsole output:\n${logs.join('\n')}`,
+              },
+            ],
+            isError: false,
+          }
+        } catch (error) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: `Script execution failed: ${(error as Error).message}`,
+              },
+            ],
+            isError: true,
+          }
         }
-      } catch (error) {
+      }
+
+      default:
         return {
           content: [
             {
               type: 'text',
-              text: `Script execution failed: ${(error as Error).message}`,
+              text: `Unknown tool: ${name}`,
             },
           ],
           isError: true,
         }
-      }
-
-    default:
-      return {
-        content: [
-          {
-            type: 'text',
-            text: `Unknown tool: ${name}`,
-          },
-        ],
-        isError: true,
-      }
+    }
+  } catch (error) {
+    console.error(error)
+    return {
+      content: [
+        {
+          type: 'text',
+          text: `Failed to handle tool call: ${name}\n\tArgs: ${JSON.stringify(args)}\n\tError: ${error}`,
+        },
+      ],
+      isError: true,
+    }
   }
 }
 
@@ -743,4 +737,4 @@ const server = new MCPServerWrapper({
   callTool: handleToolCallRequest,
 })
 
-server.listen(+(process.env.PORT || 80))
+server.listen(80)
