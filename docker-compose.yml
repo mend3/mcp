@@ -1,0 +1,96 @@
+services:
+  mcp-puppeteer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        - NODE_VERSION=${NODE_VERSION}
+    container_name: mcp-puppeteer
+    command: tsx src/puppeteer.ts
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "require('http').get('http://localhost:80/healthz', res => process.exit(res.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 10s
+      retries: 3
+    environment:
+      BROWSER_HOST: ws://browserless:3000
+      ALLOW_DANGEROUS: 'true'
+      USER_AGENT: ${USER_AGENT:-Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.6167.85 Safari/537.36}
+      PUPPETEER_LAUNCH_OPTIONS: '{"executablePath": "/usr/bin/google-chrome", "slowMo": 120}'
+    depends_on:
+      - browserless
+    networks:
+      - internal
+    ports:
+      - 8000:80
+  mcp-pgvector:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        - NODE_VERSION=${NODE_VERSION}
+    container_name: mcp-pgvector
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "require('http').get('http://localhost:80/healthz', res => process.exit(res.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 10s
+      retries: 3
+    command: tsx src/pgvector.ts
+    environment:
+      PGHOST: ${PGVECTOR_HOST}
+      PGPORT: ${PGVECTOR_PORT}
+      PGUSER: ${PGVECTOR_USER}
+      PGPASSWORD: ${PGVECTOR_PASSWORD}
+      PGDATABASE: ${PGVECTOR_DATABASE}
+    depends_on:
+      - pgvector
+    networks:
+      - internal
+    ports:
+      - 8001:80
+  mcp-mysql:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        - NODE_VERSION=${NODE_VERSION}
+    container_name: mcp-mysql
+    command: tsx src/mysql.ts
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "require('http').get('http://localhost:80/healthz', res => process.exit(res.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 10s
+      retries: 3
+    depends_on:
+      - mysql
+      - redis
+    environment:
+      MYSQL_DRIVER: ${MYSQL_DRIVER:-mysql} # or mariadb
+      MYSQL_HOST: ${MYSQL_HOST:-mysql}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      IO_REDIS_HOST: ${REDIS_HOST:-redis}
+      DEBUG: false # or true to enable mysql debug mode
+    networks:
+      - internal
+    ports:
+      - 8002:80
