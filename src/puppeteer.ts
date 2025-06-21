@@ -1,12 +1,153 @@
-import type { CallToolRequest, CallToolResult, ImageContent, TextContent, Tool } from '@modelcontextprotocol/sdk/types'
-import puppeteer, { Browser, LaunchOptions, Page } from 'puppeteer'
+import type {
+  CallToolRequest,
+  CallToolResult,
+  ListResourcesRequest,
+  ListResourcesResult,
+  ReadResourceRequest,
+  ReadResourceResult,
+  Tool,
+} from '@modelcontextprotocol/sdk/types'
+import { Browser, LaunchOptions, Page } from 'puppeteer'
+import puppeteer from 'puppeteer-extra'
+import StealthPlugin from 'puppeteer-extra-plugin-stealth'
 import { MCPServerWrapper } from './core/wrapper'
+import { deepMerge } from './functions'
 
-let browser: Browser | null = null as any // Initialize as null to avoid TypeScript errors
-let page: Page | null = null as any // Initialize as null to avoid TypeScript errors
+let browser: Browser | null = null
+let page: Page | null = null
 const consoleLogs: string[] = []
 const screenshots = new Map<string, string>()
-let previousLaunchOptions: any = null
+let previousLaunchOptions: LaunchOptions | null = null
+
+puppeteer.use(StealthPlugin())
+
+const {
+  USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36',
+  BROWSER_HOST, // 'ws://localhost:9222/devtools/browser'
+  PORT = 80,
+  PUPPETEER_LAUNCH_OPTIONS = '{}',
+  ALLOW_DANGEROUS = 'false',
+} = process.env
+
+const browserize = (userAgent: string, page: Page) =>
+  page.evaluateOnNewDocument(__USER_AGENT__ => {
+    // https://intoli.com/blog/making-chrome-headless-undetectable/
+    // https://antoinevastel.com/bot%20detection/2018/01/17/detect-chrome-headless-v2.html
+    // Hide overridden properties from `Object.getOwnPropertyNames`
+    const originalNavigator = { ...navigator }
+    for (const key in originalNavigator) {
+      if (!Object.prototype.hasOwnProperty.call(navigator, key)) {
+        Object.defineProperty(navigator, key, {
+          get: () => originalNavigator[key as keyof typeof originalNavigator],
+          configurable: true,
+        })
+      }
+    }
+
+    // Clean up `navigator` properties
+    Object.defineProperties(navigator, {
+      deviceMemory: { value: 4 },
+      hardwareConcurrency: { value: 4 },
+      webdriver: {
+        get: () => false,
+        configurable: true,
+        enumerable: false,
+      },
+      platform: {
+        get: () => 'Win32',
+      },
+      appVersion: {
+        get: () => __USER_AGENT__,
+      },
+      userAgent: {
+        get: () => __USER_AGENT__,
+      },
+      userAgentData: {
+        get: () => ({
+          brands: [
+            { brand: 'Google Chrome', version: '137' },
+            { brand: 'Chromium', version: '137' },
+            { brand: 'Not/A)Brand', version: '24' },
+          ],
+          mobile: false,
+          platform: 'Windows',
+        }),
+      },
+      languages: { get: () => ['pt-BR', 'en-US', 'pt', 'en'] },
+      plugins: {
+        get: function () {
+          const pluginData = [
+            { name: 'PDF Viewer', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
+            { name: 'Chrome PDF Viewer', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
+            { name: 'Chromium PDF Viewer', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
+            {
+              name: 'Microsoft Edge PDF Viewer',
+              filename: 'internal-pdf-viewer',
+              description: 'Portable Document Format',
+            },
+            { name: 'WebKit built-in PDF', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
+          ]
+          const pluginArray: {
+            name: string
+            filename: string
+            description: string
+          }[] = []
+          pluginData.forEach(p => {
+            function FakePlugin() {
+              return p
+            }
+            const plugin = FakePlugin()
+            Object.setPrototypeOf(plugin, Plugin.prototype)
+            pluginArray.push(plugin)
+          })
+          Object.setPrototypeOf(pluginArray, PluginArray.prototype)
+          return pluginArray
+        },
+      },
+    })
+
+    WebGLRenderingContext.prototype.getParameter = function (parameter) {
+      // UNMASKED_VENDOR_WEBGL
+      if (parameter === 37445) {
+        return 'Google Inc. (NVIDIA)'
+      }
+      // UNMASKED_RENDERER_WEBGL
+      if (parameter === 37446) {
+        return 'ANGLE (NVIDIA, NVIDIA GeForce RTX 3070 (0x00002484) Direct3D11 vs_5_0 ps_5_0, D3D11)'
+      }
+
+      return new WebGLRenderingContext().getParameter(parameter)
+    }
+    ;['height', 'width'].forEach(property => {
+      // store the existing descriptor
+      const imageDescriptor = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, property)
+
+      // redefine the property with a patched descriptor
+      Object.defineProperty(HTMLImageElement.prototype, property, {
+        ...imageDescriptor,
+        get: function () {
+          // return an arbitrary non-zero dimension if the image failed to load
+          if (this.complete && this.naturalHeight === 0) return 20
+
+          // otherwise, return the actual dimension
+          return imageDescriptor?.get?.apply(this)
+        },
+      })
+    })
+
+    // store the existing descriptor
+    const elementDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetHeight')
+
+    // redefine the property with a patched descriptor
+    Object.defineProperty(HTMLDivElement.prototype, 'offsetHeight', {
+      ...elementDescriptor,
+      get: function () {
+        if (this.id === 'modernizr') return 1
+
+        return elementDescriptor?.get?.apply(this)
+      },
+    })
+  }, userAgent)
 
 async function ensureBrowser({
   launchOptions,
@@ -27,13 +168,11 @@ async function ensureBrowser({
     '--allow-running-insecure-content',
   ]
 
-  const defaultConfig: LaunchOptions = {
+  const defaultConfig = {
     headless: false,
-    executablePath: process.env.CHROME_EXECUTABLE_PATH || '/usr/bin/google-chrome',
     acceptInsecureCerts: true,
     defaultViewport: null,
     protocol: 'cdp',
-    // slowMo: 120, // Uncomment to visualize test
     args: [
       // Anonymity & Fingerprinting
       '--disable-infobars', // Hides "Chrome is being controlled by automated test software"
@@ -83,20 +222,28 @@ async function ensureBrowser({
       '--disable-webrtc',
     ],
   }
-  let envConfig: LaunchOptions = {}
+
+  let envConfig: Partial<typeof defaultConfig> = {}
   try {
-    envConfig = JSON.parse(process.env.PUPPETEER_LAUNCH_OPTIONS || '{}')
+    envConfig = JSON.parse(PUPPETEER_LAUNCH_OPTIONS)
   } catch (error: any) {
     console.warn('Failed to parse PUPPETEER_LAUNCH_OPTIONS:', error?.message || error)
   }
 
-  const mergedConfig = deepMerge({ ...defaultConfig, ...envConfig }, launchOptions || {}) as LaunchOptions
+  const mergedConfig = deepMerge(
+    {
+      ...defaultConfig,
+      ...envConfig,
+      args: Array.from(new Set(defaultConfig.args.concat(envConfig.args || [])).values()),
+    },
+    launchOptions || {},
+  ) as LaunchOptions
 
   if (mergedConfig?.args) {
-    const dangerousArgs = mergedConfig.args?.filter?.((arg: string) =>
-      DANGEROUS_ARGS.some((dangerousArg: string) => arg.startsWith(dangerousArg)),
+    const dangerousArgs = mergedConfig.args.filter(arg =>
+      DANGEROUS_ARGS.some(dangerousArg => arg.startsWith(dangerousArg)),
     )
-    if (dangerousArgs?.length > 0 && !(allowDangerous || process.env.ALLOW_DANGEROUS === 'true')) {
+    if (dangerousArgs?.length > 0 && !(allowDangerous || ALLOW_DANGEROUS === 'true')) {
       throw new Error(
         `Dangerous browser arguments detected: ${dangerousArgs.join(', ')}. Fround from environment variable and tool call argument. ` +
           'Set allowDangerous: true in the tool call arguments to override.',
@@ -119,12 +266,16 @@ async function ensureBrowser({
   previousLaunchOptions = launchOptions
 
   if (!browser) {
-    browser = await (process.env.BROWSER_HOST
+    browser = await (BROWSER_HOST
       ? puppeteer.connect({
           acceptInsecureCerts: true,
-          browserWSEndpoint: process.env.BROWSER_HOST || 'ws://localhost:9222/devtools/browser',
+          browserWSEndpoint: BROWSER_HOST,
           defaultViewport: null,
           protocol: 'cdp',
+          headers: {
+            'keep-alive': '300000',
+            'user-agent': USER_AGENT,
+          },
         })
       : puppeteer.launch(
           deepMerge(
@@ -139,6 +290,8 @@ async function ensureBrowser({
         ))
     const pages = await browser.pages()
     page = pages[0]
+    await page.setUserAgent(USER_AGENT)
+    await browserize(USER_AGENT, page)
 
     page.on('console', msg => {
       const logEntry = `[${msg.type()}] ${msg.text()}`
@@ -150,45 +303,6 @@ async function ensureBrowser({
     })
   }
   return page!
-}
-
-function deepMerge(target: any, source: any): any {
-  const output = Object.assign({}, target)
-  if (typeof target !== 'object' || typeof source !== 'object') return source
-
-  for (const key of Object.keys(source)) {
-    const targetVal = target[key]
-    const sourceVal = source[key]
-    if (Array.isArray(targetVal) && Array.isArray(sourceVal)) {
-      output[key] = [
-        ...new Set([
-          ...(key === 'args' || key === 'ignoreDefaultArgs'
-            ? targetVal.filter(
-                (arg: string) =>
-                  !sourceVal.some(
-                    (launchArg: string) => arg.startsWith('--') && launchArg.startsWith(arg.split('=')[0]),
-                  ),
-              )
-            : targetVal),
-          ...sourceVal,
-        ]),
-      ]
-    } else if (sourceVal instanceof Object && key in target) {
-      output[key] = deepMerge(targetVal, sourceVal)
-    } else {
-      output[key] = sourceVal
-    }
-  }
-  return output
-}
-
-declare global {
-  interface Window {
-    mcpHelper: {
-      logs: string[]
-      originalConsole: Partial<typeof console>
-    }
-  }
 }
 
 const TOOLS: Tool[] = [
@@ -214,14 +328,22 @@ const TOOLS: Tool[] = [
     },
   },
   {
+    name: 'puppeteer_openPage',
+    description: 'Open a new page',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        url: { type: 'string', description: 'URL to navigate to' },
+      },
+    },
+  },
+  {
     name: 'puppeteer_screenshot',
     description: 'Take a screenshot of the current page or a specific element',
     inputSchema: {
       type: 'object',
       properties: {
-        selector: { type: 'string', description: 'CSS selector or XPath for element to screenshot' },
-        width: { type: 'number', description: 'Width in pixels (default: 800)' },
-        height: { type: 'number', description: 'Height in pixels (default: 600)' },
+        fullPage: { type: 'boolean', description: 'If true, take a full page screenshot (default: true)' },
       },
     },
   },
@@ -269,17 +391,6 @@ const TOOLS: Tool[] = [
         selector: { type: 'string', description: 'CSS selector or XPath for element to hover' },
       },
       required: ['selector'],
-    },
-  },
-  {
-    name: 'puppeteer_evaluate',
-    description: 'Execute JavaScript in the browser console',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        script: { type: 'string', description: 'JavaScript code to execute' },
-      },
-      required: ['script'],
     },
   },
   {
@@ -339,13 +450,34 @@ const TOOLS: Tool[] = [
     },
   },
   {
-    name: 'puppeteer_evaluateAll',
-    description: 'Evaluate JavaScript across all elements matching a selector and return structured results',
+    name: 'puppeteer_evaluate',
+    description:
+      'Execute JavaScript in the browser console. Expected a string of code to execute (e.g., `document.querySelector("div.main-content").innerText.trim()`). Care to use coalescing operator to handle nullish values.',
     inputSchema: {
       type: 'object',
       properties: {
-        selector: { type: 'string', description: 'CSS selector or XPath for elements to evaluate' },
-        expression: { type: 'string', description: 'JavaScript expression to run on each selected element' },
+        script: { type: 'string', description: 'JavaScript code to execute' },
+      },
+      required: ['script'],
+    },
+  },
+  {
+    name: 'puppeteer_evaluateAll',
+    description:
+      'Evaluates a JavaScript expression on all elements matching a selector. The expression can reference the element as `el` and is evaluated in the browser context. Returns an array of results. The results are an object with the following properties: evaluationOutput (output from the expression), element (useful properties of the element).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        selector: {
+          type: 'string',
+          description:
+            'CSS or XPath selector to target elements (e.g., "div.main-content" or "//div[@class=\'main-content\']"). A single selector is expected.',
+        },
+        expression: {
+          type: 'string',
+          description:
+            'JavaScript expression (function body) to run on each selected element. The current element is passed as `el`. For example: `return el.innerText?.trim();`. This will be evaluated using `new Function("el", expression)` so it is IMPERATIVE that the expression is a valid JavaScript function body with a return statement.',
+        },
       },
       required: ['selector', 'expression'],
     },
@@ -397,360 +529,8 @@ const TOOLS: Tool[] = [
   },
 ]
 
-async function handleToolCallRequest(request: CallToolRequest): Promise<CallToolResult> {
-  const { name, arguments: _args } = request.params as { name: string; arguments: any }
-  const args = structuredClone(_args || {})
-  console.log(`Handling tool call: ${name}`, args)
-  page = await ensureBrowser(args)
-
-  try {
-    if (!page) throw new Error('Failed to get a page')
-
-    switch (name) {
-      case 'puppeteer_waitForNavigation': {
-        await page.waitForNavigation({
-          timeout: args.timeout,
-          waitUntil: args.waitUntil || 'load',
-        })
-        return {
-          content: [{ type: 'text', text: `Waited for navigation (waitUntil: ${args.waitUntil || 'load'})` }],
-          isError: false,
-        }
-      }
-
-      case 'puppeteer_scrollTo': {
-        await page.evaluate(({ x = 0, y = 0 }) => window.scrollTo(x, y), { x: args.x, y: args.y })
-        return {
-          content: [{ type: 'text', text: `Scrolled to position x:${args.x || 0}, y:${args.y || 0}` }],
-          isError: false,
-        }
-      }
-
-      case 'puppeteer_closeBrowser': {
-        if (browser) await browser.close()
-        return {
-          content: [{ type: 'text', text: `Browser closed` }],
-          isError: false,
-        }
-      }
-
-      case 'puppeteer_scrollElement': {
-        await page.evaluate(
-          ({ selector, x = 0, y = 0 }) => {
-            const el = document.querySelector(selector)
-            if (el) el.scrollTo(x, y)
-          },
-          { selector: args.selector, x: args.x, y: args.y },
-        )
-        return {
-          content: [{ type: 'text', text: `Scrolled element ${args.selector} to x:${args.x || 0}, y:${args.y || 0}` }],
-          isError: false,
-        }
-      }
-
-      case 'puppeteer_evaluateAll': {
-        const results = await page.$$eval(
-          args.selector,
-          (elements, expression) => {
-            return elements.map(el => {
-              try {
-                return eval(expression)
-              } catch (e) {
-                return null
-              }
-            })
-          },
-          args.expression,
-        )
-        return {
-          content: [{ type: 'text', text: JSON.stringify(results) }],
-          isError: false,
-        }
-      }
-
-      case 'puppeteer_pressKey': {
-        await page.keyboard.press(args.key, {
-          delay: args.delay,
-        })
-        return {
-          content: [{ type: 'text', text: `Pressed key ${args.key}` }],
-          isError: false,
-        }
-      }
-
-      case 'puppeteer_closePage': {
-        await page.close()
-        return {
-          content: [{ type: 'text', text: `Closed the page` }],
-          isError: false,
-        }
-      }
-
-      case 'puppeteer_reloadPage': {
-        await page.reload({ waitUntil: args.waitUntil || 'load' })
-        return {
-          content: [{ type: 'text', text: `Reloaded the page (waitUntil: ${args.waitUntil || 'load'})` }],
-          isError: false,
-        }
-      }
-
-      case 'puppeteer_navigate': {
-        await page.goto(args.url, { waitUntil: 'load' })
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `Navigated to ${args.url}`,
-            },
-          ],
-          isError: false,
-        }
-      }
-
-      case 'puppeteer_waitForSelector': {
-        const waitResult = await page.waitForSelector(args.selector).catch(err => err)
-        if (waitResult instanceof Error)
-          return {
-            content: [
-              {
-                type: 'text',
-                text: `Selector not found: ${args.selector}`,
-              },
-            ],
-            isError: true,
-          }
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `Selector found: ${args.selector}`,
-            },
-          ],
-          isError: false,
-        }
-      }
-
-      case 'puppeteer_screenshot': {
-        try {
-          const screenshot = await page.screenshot({ encoding: 'base64', fullPage: false }).catch(err => err)
-
-          if (!screenshot || screenshot instanceof Error) {
-            return {
-              content: [
-                {
-                  type: 'text',
-                  text: 'Screenshot failed',
-                },
-              ],
-              isError: true,
-            }
-          }
-
-          const name = `screenshot-${Date.now()}`
-
-          screenshots.set(name, screenshot as string)
-          server.notification({
-            method: 'notifications/resources/list_changed',
-          })
-
-          return {
-            content: [
-              {
-                type: 'text',
-                text: `Screenshot '${name}' taken successfully.`,
-              } as TextContent,
-              {
-                type: 'image',
-                data: screenshot,
-                mimeType: 'image/png',
-              } as ImageContent,
-            ],
-            isError: false,
-          }
-        } catch (error) {
-          return {
-            content: [
-              {
-                type: 'text',
-                text: `Failed to screenshot: ${(error as Error).message}`,
-              } as TextContent,
-            ],
-            isError: true,
-          }
-        }
-      }
-
-      case 'puppeteer_click': {
-        const waitResult = await page.waitForSelector(args.selector).catch(err => err)
-        if (waitResult instanceof Error)
-          return {
-            content: [
-              {
-                type: 'text',
-                text: `Selector not found: ${args.selector}`,
-              },
-            ],
-            isError: true,
-          }
-        await page.click(args.selector)
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `Clicked: ${args.selector}`,
-            },
-          ],
-          isError: false,
-        }
-      }
-
-      case 'puppeteer_fill': {
-        const waitResult = await page.waitForSelector(args.selector).catch(err => err)
-        if (waitResult instanceof Error)
-          return {
-            content: [
-              {
-                type: 'text',
-                text: `Selector not found: ${args.selector}`,
-              },
-            ],
-            isError: true,
-          }
-        await page.type(args.selector, args.value)
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `Filled ${args.selector} with: ${args.value}`,
-            },
-          ],
-          isError: false,
-        }
-      }
-
-      case 'puppeteer_select': {
-        const waitResult = await page.waitForSelector(args.selector).catch(err => err)
-        if (waitResult instanceof Error)
-          return {
-            content: [
-              {
-                type: 'text',
-                text: `Selector not found: ${args.selector}`,
-              },
-            ],
-            isError: true,
-          }
-        await page.select(args.selector, args.value)
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `Selected ${args.selector} with: ${args.value}`,
-            },
-          ],
-          isError: false,
-        }
-      }
-
-      case 'puppeteer_hover': {
-        const waitResult = await page.waitForSelector(args.selector).catch(err => err)
-        if (waitResult instanceof Error)
-          return {
-            content: [
-              {
-                type: 'text',
-                text: `Selector not found: ${args.selector}`,
-              },
-            ],
-            isError: true,
-          }
-        await page.hover(args.selector)
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `Hovered ${args.selector}`,
-            },
-          ],
-          isError: false,
-        }
-      }
-
-      case 'puppeteer_evaluate': {
-        try {
-          await page.evaluate(() => {
-            window.mcpHelper = {
-              logs: [],
-              originalConsole: { ...console },
-            }
-            ;['log', 'info', 'warn', 'error'].forEach(method => {
-              ;(console as any)[method] = (...args: any[]) => {
-                window.mcpHelper.logs.push(`[${method}] ${args.join(' ')}`)
-                ;(window.mcpHelper.originalConsole as any)[method](...args)
-              }
-            })
-          })
-
-          const result = await page.evaluate(args.script)
-
-          const logs = await page.evaluate(() => {
-            Object.assign(console, window.mcpHelper.originalConsole)
-            const logs = window.mcpHelper.logs
-            delete (window as any).mcpHelper
-            return logs
-          })
-
-          return {
-            content: [
-              {
-                type: 'text',
-                text: `Execution result:\n${JSON.stringify(result, null, 2)}\n\nConsole output:\n${logs.join('\n')}`,
-              },
-            ],
-            isError: false,
-          }
-        } catch (error) {
-          return {
-            content: [
-              {
-                type: 'text',
-                text: `Script execution failed: ${(error as Error).message}`,
-              },
-            ],
-            isError: true,
-          }
-        }
-      }
-
-      default:
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `Unknown tool: ${name}`,
-            },
-          ],
-          isError: true,
-        }
-    }
-  } catch (error) {
-    console.error(error)
-    return {
-      content: [
-        {
-          type: 'text',
-          text: `Failed to handle tool call: ${name}\n\tArgs: ${JSON.stringify(args)}\n\tError: ${error}`,
-        },
-      ],
-      isError: true,
-    }
-  }
-}
-
-const server = new MCPServerWrapper({
-  name: 'mcp-servers/puppeteer',
-  version: '0.1.0',
-  listResources: async () => ({
+const listResources: (request: ListResourcesRequest) => Promise<ListResourcesResult> = async request => {
+  return {
     resources: [
       {
         uri: 'console://logs',
@@ -763,46 +543,310 @@ const server = new MCPServerWrapper({
         name: `Screenshot: ${name}`,
       })),
     ],
-  }),
-  readResource: async request => {
-    {
-      const uri = request.params.uri.toString()
+  }
+}
 
-      if (uri === 'console://logs') {
+const readResource: (request: ReadResourceRequest) => Promise<ReadResourceResult> = async request => {
+  {
+    const uri = request.params.uri.toString()
+
+    if (uri === 'console://logs') {
+      return {
+        contents: [
+          {
+            uri,
+            mimeType: 'text/plain',
+            text: consoleLogs.join('\n'),
+          },
+        ],
+      }
+    }
+
+    if (uri.startsWith('screenshot://')) {
+      const name = uri.split('://')[1]
+      const screenshot = screenshots.get(name)
+      if (screenshot) {
         return {
           contents: [
             {
               uri,
-              mimeType: 'text/plain',
-              text: consoleLogs.join('\n'),
+              mimeType: 'image/png',
+              blob: screenshot,
             },
           ],
         }
       }
+    }
 
-      if (uri.startsWith('screenshot://')) {
-        const name = uri.split('://')[1]
-        const screenshot = screenshots.get(name)
-        if (screenshot) {
-          return {
-            contents: [
-              {
-                uri,
-                mimeType: 'image/png',
-                blob: screenshot,
-              },
-            ],
-          }
+    throw new Error(`Resource not found: ${uri}`)
+  }
+}
+
+const formatResponse = (content: CallToolResult['content'][number], isError = false): CallToolResult => {
+  return { isError, content: [content] }
+}
+
+const callTool = async (
+  request: CallToolRequest,
+): Promise<CallToolResult['content'][number] & { isError?: boolean }> => {
+  const { name, arguments: _args } = request.params as { name: string; arguments: any }
+  const args = { ...(_args || {}) }
+  console.log(`Handling tool call: ${name}`, args)
+  page = await ensureBrowser(args)
+
+  if (!page || page.isClosed()) throw new Error('Failed to get a page. Call tool to open a new page.')
+
+  switch (name) {
+    case 'puppeteer_reloadPage': {
+      await page.reload({ waitUntil: args.waitUntil || 'load' })
+      return {
+        type: 'text',
+        text: `Reloaded the page (waitUntil: ${args.waitUntil || 'load'})`,
+      }
+    }
+
+    case 'puppeteer_openPage': {
+      page = await ensureBrowser(args)
+      await page.goto(args.url, { waitUntil: 'load' })
+      return {
+        type: 'text',
+        text: `Navigated to ${args.url}`,
+      }
+    }
+
+    case 'puppeteer_navigate': {
+      await page.goto(args.url, { waitUntil: 'load' })
+      return {
+        type: 'text',
+        text: `Navigated to ${args.url}`,
+      }
+    }
+    case 'puppeteer_waitForNavigation': {
+      await page.waitForNavigation({
+        timeout: args.timeout,
+        waitUntil: args.waitUntil || 'load',
+      })
+      return {
+        type: 'text',
+        text: `Waited for navigation (waitUntil: ${args.waitUntil || 'load'})`,
+      }
+    }
+
+    case 'puppeteer_closeBrowser': {
+      if (browser) await browser.close()
+      return {
+        type: 'text',
+        text: `Browser closed`,
+      }
+    }
+
+    case 'puppeteer_scrollElement': {
+      await page.evaluate(
+        ({ selector, x = 0, y = 0 }) => {
+          const el = document.querySelector(selector)
+          if (el) el.scrollTo(x, y)
+        },
+        { selector: args.selector, x: args.x, y: args.y },
+      )
+      return {
+        type: 'text',
+        text: `Scrolled element ${args.selector} to x:${args.x || 0}, y:${args.y || 0}`,
+      }
+    }
+
+    case 'puppeteer_scrollTo': {
+      await page.evaluate(({ x = 0, y = 0 }) => window.scrollTo(x, y), { x: args.x, y: args.y })
+      return {
+        type: 'text',
+        text: `Scrolled to position x:${args.x || 0}, y:${args.y || 0}`,
+      }
+    }
+
+    case 'puppeteer_evaluate': {
+      await page.evaluate(() => {
+        window.mcpHelper = {
+          logs: [],
+          originalConsole: { ...console },
         }
+        const levels = ['log', 'info', 'warn', 'error'] as const
+        levels.forEach(method => {
+          console[method] = (...args: any[]) => {
+            window.mcpHelper.logs.push(`[${method}] ${args.join(' ')}`)
+            window.mcpHelper.originalConsole[method](...args)
+          }
+        })
+      })
+
+      const evaluatedResult = await page.$eval(args.selector || '*', args.script)
+      const result = typeof evaluatedResult === 'function' ? await evaluatedResult() : evaluatedResult
+
+      const logs = await page.evaluate(() => {
+        Object.assign(console, window.mcpHelper.originalConsole)
+        const logs = window.mcpHelper.logs
+        delete (window as any).mcpHelper
+        return logs
+      })
+
+      return {
+        type: 'text',
+        text: `Execution result:\n${JSON.stringify(result, null, 2)}\n\nConsole output:\n${logs.join('\n')}`,
+      }
+    }
+
+    case 'puppeteer_evaluateAll': {
+      const results = await page.$$eval(
+        args.selector,
+        (elements, expression) =>
+          (elements || []).map(el => {
+            const element = {
+              attributes: Object.entries(el.attributes).reduce(
+                (acc, [name, attr]) => {
+                  acc[attr.name] = attr.value
+                  return acc
+                },
+                {} as Record<string, string>,
+              ),
+              tagName: el.tagName,
+              id: el.id,
+              classList: Array.from(el.classList),
+              innerHTML: el.innerHTML,
+              outerHTML: el.outerHTML,
+              textContent: el.textContent,
+            }
+
+            const fnExpression = expression.indexOf('return ') === -1 ? `return ${expression}` : expression
+            try {
+              const fn = new Function('el', fnExpression)
+              return fn(el)
+            } catch (error) {
+              return {
+                evaluationError: (error as Error).message,
+                evaluationErrorStack: (error as Error).stack,
+                expression: fnExpression,
+                element,
+              }
+            }
+          }),
+        args.expression,
+      )
+      return {
+        type: 'text',
+        text: JSON.stringify(results.filter(Boolean)),
+      }
+    }
+
+    case 'puppeteer_pressKey': {
+      await page.keyboard.press(args.key, {
+        delay: args.delay,
+      })
+      return {
+        type: 'text',
+        text: `Pressed key ${args.key}`,
+      }
+    }
+
+    case 'puppeteer_closePage': {
+      const { title } = page.mainFrame()
+      await page.close()
+      return {
+        type: 'text',
+        text: `Page ${title} closed`,
+      }
+    }
+
+    case 'puppeteer_waitForSelector': {
+      await page.waitForSelector(args.selector)
+      return {
+        type: 'text',
+        text: `Selector found: ${args.selector}`,
+      }
+    }
+
+    case 'puppeteer_click': {
+      await page.waitForSelector(args.selector)
+      await page.hover(args.selector)
+      await page.click(args.selector)
+      return {
+        type: 'text',
+        text: `Clicked: ${args.selector}`,
+      }
+    }
+
+    case 'puppeteer_fill': {
+      await page.waitForSelector(args.selector)
+      await page.hover(args.selector)
+      await page.type(args.selector, args.value)
+      return {
+        type: 'text',
+        text: `Filled ${args.selector} with: ${args.value}`,
+      }
+    }
+
+    case 'puppeteer_select': {
+      await page.waitForSelector(args.selector)
+      await page.hover(args.selector)
+      await page.select(args.selector, args.value)
+      return {
+        type: 'text',
+        text: `Selected ${args.selector} with: ${args.value}`,
+      }
+    }
+
+    case 'puppeteer_hover': {
+      await page.waitForSelector(args.selector)
+      await page.hover(args.selector)
+      return {
+        type: 'text',
+        text: `Hovered ${args.selector}`,
+      }
+    }
+
+    case 'puppeteer_screenshot': {
+      const screenshot = await page.screenshot({ encoding: 'base64', fullPage: args.fullPage || true })
+
+      if (!screenshot) {
+        throw new Error('Screenshot failed')
       }
 
-      throw new Error(`Resource not found: ${uri}`)
+      const name = `screenshot-${Date.now()}`
+
+      screenshots.set(name, screenshot as string)
+      server.notification({
+        method: 'notifications/resources/list_changed',
+      })
+
+      return {
+        type: 'image',
+        data: screenshot,
+        mimeType: 'image/png',
+      }
     }
-  },
+
+    default:
+      throw new Error(`Unknown tool: ${name}`)
+  }
+}
+
+const server = new MCPServerWrapper({
+  name: 'mcp-servers/puppeteer',
+  version: '0.1.0',
   listTools: () => ({
     tools: TOOLS,
   }),
-  callTool: handleToolCallRequest,
+  listResources,
+  readResource,
+  callTool: request =>
+    callTool(request)
+      .then(({ isError, ...result }) => formatResponse(result, isError))
+      .catch(error =>
+        formatResponse(
+          {
+            type: 'text',
+            text: `Failed to handle tool call: ${request.params.name}\n\tArgs: ${JSON.stringify(request.params.arguments)}\n\tError: ${error.message}`,
+          },
+          true,
+        ),
+      ),
 })
 
-server.listen(+(process.env.PORT || 80))
+server.listen(+(PORT || 80))

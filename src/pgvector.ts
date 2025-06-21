@@ -23,7 +23,7 @@ const server = new MCPServerWrapper({
     const res = await pg.query(`
     SELECT DISTINCT table_name
     FROM information_schema.columns
-    WHERE udt_name = 'vector_db' AND table_schema = 'public';
+    WHERE udt_name = '${PGDATABASE}' AND table_schema = 'public';
   `)
 
     const tableNames = res.rows.map(r => r.table_name)
@@ -45,7 +45,7 @@ const server = new MCPServerWrapper({
     )
 
     const schema = res.rows
-      .map(col => `${col.column_name}: ${col.udt_name === 'vector_db' ? 'vector_db' : col.data_type}`)
+      .map(col => `${col.column_name}: ${col.udt_name === PGDATABASE ? PGDATABASE : col.data_type}`)
       .join('\n')
 
     return {

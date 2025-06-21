@@ -52,7 +52,7 @@ const server = new MCPServerWrapper({
   readResource: async request => {
     const filePath = request.params.uri.replace('file://', '')
     try {
-      await fs.access(filePath)
+      await fs.access(filePath, fs.constants.R_OK)
       return {
         contents: [
           {
