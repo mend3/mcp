@@ -17,10 +17,11 @@
     "fastest-validator": "1.19.0",
     "ioredis": "5.6.1",
     "mysql2": "3.14.1",
-    "n8n-nodes-mcp": "0.1.28",
     "parquet-wasm": "0.6.1",
     "pg": "8.16.0",
     "puppeteer": "24.10.0",
+    "puppeteer-extra": "3.3.6",
+    "puppeteer-extra-plugin-stealth": "2.11.2",
     "typeorm": "0.3.24",
     "zod": "3.25.56"
   },
